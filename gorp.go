@@ -231,36 +231,34 @@ func expandNamedQuery(m *DbMap, query string, keyGetter func(key string) reflect
 func columnToFieldIndex(m *DbMap, t reflect.Type, name string, cols []string) ([][]int, error) {
 	colToFieldIndex := make([][]int, len(cols))
 
-	// check if type t is a mapped table - if so we'll
-	// check the table for column aliasing below
-	tableMapped := false
 	table := tableOrNil(m, t, name)
-	if table != nil {
-		tableMapped = true
-	}
+	var foundColCount int
 
 	lowerCaseCols := make([]string, len(cols))
 	for i, v := range cols {
 		lowerCaseCols[i] = strings.ToLower(v)
 	}
 
-	// Loop over column names and find field in i to bind to
-	// based on column name. all returned columns must match
-	// a field in the i struct
-	var foundColCount int
-	// better to use recursive function to loop
-	t.FieldByNameFunc(func(name string) bool {
-		field, _ := t.FieldByName(name)
+	// loop over all the fields (like FieldByNameFunc) and bind to columns name
+	numField := t.NumField()
+	fieldQueue := make([]reflect.StructField, 0, numField)
+	for fIdx := 0; fIdx < numField; fIdx++ {
+		fieldQueue = append(fieldQueue, t.Field(fIdx))
+	}
+
+	for len(fieldQueue) > 0 {
+		var field reflect.StructField
+		field, fieldQueue = fieldQueue[0], fieldQueue[1:]
 		cArguments := strings.Split(field.Tag.Get("db"), ",")
 		fieldName := cArguments[0]
 
 		if fieldName == "-" {
-			return false
+			continue
 		} else if fieldName == "" {
 			fieldName = field.Name
 		}
 
-		if tableMapped {
+		if table != nil {
 			colMap := colMapOrNil(table, fieldName)
 			if colMap != nil {
 				fieldName = colMap.ColumnName
@@ -270,16 +268,19 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, name string, cols []string) ([
 		fieldName = strings.ToLower(fieldName)
 
 		for i, v := range lowerCaseCols {
-			if v != fieldName {
+			if v != fieldName || colToFieldIndex[i] != nil {
 				continue
 			}
 			foundColCount++
 			colToFieldIndex[i] = field.Index
 		}
-		// we use this FieldByNameFunc too loop over the struct fields
-		// so don't want to it be returned with true
-		return false
-	})
+
+		if field.Anonymous {
+			for fIdx := 0; fIdx < field.Type.NumField(); fIdx++ {
+				fieldQueue = append(fieldQueue, field.Type.Field(fIdx))
+			}
+		}
+	}
 
 	missingColCount := len(cols) - foundColCount
 	if missingColCount > 0 {
